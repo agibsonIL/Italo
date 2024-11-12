@@ -198,14 +198,14 @@ class MainWindow:
                 + ("s" if len(matches) != 1 else "")
                 + f" in {len(studies)} "
                 + ("studies" if len(studies) != 1 else "study")
-                + (f" at [{" | ".join(studies)}]." if studies else "."),
+                + (f" at [{' | '.join(studies)}]." if studies else "."),
                 True,
             )
             self.set_progress_bar(value=(100 if len(matches) else 0))
             self.images = matches
 
     async def transfer_images(self, images=None, target_dir=None):
-        """Ask the HALO GraphQL server to change the the source image location
+        """Ask the HALO GraphQL server to change the source image location
         with the target image location for every image provided.
         Returns a dictionary of image IDs with target locations and transfer errors.
         """
