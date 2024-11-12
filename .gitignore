@@ -4,3 +4,6 @@ tags
 .DS_Store
 secrets.json
 *.swp
+setup.bat
+.venv
+.idea
