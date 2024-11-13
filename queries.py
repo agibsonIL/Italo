@@ -25,19 +25,67 @@ import aiohttp
 import gql
 import json
 import ssl
+from cryptography.hazmat._oid import NameOID
+from cryptography.x509 import load_pem_x509_certificate, load_der_x509_certificate, Certificate
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.serialization import load_pem_public_key, Encoding, PublicFormat
+from cryptography.hazmat.primitives.asymmetric import padding
 from gql.transport.websockets import WebsocketsTransport as gql_WebsocketsTransport
 
 
 MAX_NODES = 100  # server limit per page
 
 
+def get_cert_common_name(oid):
+    common_name_attrs = oid.get_attributes_for_oid(NameOID.COMMON_NAME)
+    if common_name_attrs:
+        return common_name_attrs[0].value
+
+
+def find_server_cert(addr: tuple[str, int]) -> tuple[Certificate, str]:
+    server_cert_pem = ssl.get_server_certificate(addr)
+    server_cert = load_pem_x509_certificate(str.encode(server_cert_pem), default_backend())
+    return server_cert, server_cert_pem
+
+
+def find_root_cert(server_cert: Certificate) -> tuple[Certificate, str]:
+    server_cert_issuer = get_cert_common_name(server_cert.issuer)
+    for store_cert_byte, encoding, trust in ssl.enum_certificates("ROOT"):
+        store_cert_pem = ssl.DER_cert_to_PEM_cert(store_cert_byte)
+        store_cert = load_der_x509_certificate(store_cert_byte, default_backend())
+        store_cert_subject = get_cert_common_name(store_cert.subject)
+        if store_cert_subject == server_cert_issuer:
+            issuer_public_key_pem = store_cert.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+            issuer_public_key = load_pem_public_key(issuer_public_key_pem)
+            try:
+                issuer_public_key.verify(
+                    server_cert.signature,
+                    server_cert.tbs_certificate_bytes,
+                    padding.PKCS1v15(),
+                    server_cert.signature_hash_algorithm,
+                )
+            except:
+                continue
+            return store_cert, store_cert_pem
+
+
+def get_cert_chain(hostname: str) -> str:
+    server_cert = find_server_cert((hostname, 443))
+    try:
+        root_cert = find_root_cert(server_cert[0])
+        return f"{server_cert[1]}\n{root_cert[1]}"
+    except:
+        return server_cert[1]
+
+
 # create a session client for authorized requests
 async def get_client(secrets, credentials):
     # configure client transport
+    cert_chain_pem = get_cert_chain(secrets['server_name'])
     websocket_transport = gql_WebsocketsTransport(
         url=f"wss://{secrets['server_name']}/graphql",
         headers={"authorization": f"bearer {credentials['access_token']}"},
-        ssl=ssl.create_default_context(),
+        ssl=ssl.create_default_context(cadata=cert_chain_pem),
         keep_alive_timeout=300,
     )
     # configure session client with transport
@@ -49,6 +97,7 @@ async def get_client(secrets, credentials):
 
 # retrieve server credentials for authentication
 async def get_credentials(secrets):
+    cert_chain_pem = get_cert_chain(secrets['server_name'])
     async with aiohttp.ClientSession() as credentials_session:
         async with credentials_session.request(
             method="Post",
@@ -59,7 +108,7 @@ async def get_credentials(secrets):
                 "grant_type": "client_credentials",
                 "scope": secrets["client_scope"],
             },
-            ssl=ssl.create_default_context(),  # None for default SSL check
+            ssl=ssl.create_default_context(cadata=cert_chain_pem),  # None for default SSL check
             raise_for_status=True,
         ) as credentials_response:
             return await credentials_response.json()  # built-in JSON decoder
