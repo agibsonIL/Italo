@@ -86,6 +86,7 @@ async def get_client(secrets, credentials):
         url=f"wss://{secrets['server_name']}/graphql",
         headers={"authorization": f"bearer {credentials['access_token']}"},
         ssl=ssl.create_default_context(cadata=cert_chain_pem),
+        connect_args={"max-size": 5*(2**20)},
         keep_alive_timeout=300,
     )
     # configure session client with transport
